@@ -1,0 +1,442 @@
+---
+- hosts: pxeserver
+  become: true
+  gather_facts: false
+
+  tasks:
+  - name: Accept login with password from sshd
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^PasswordAuthentication no$'
+      line: 'PasswordAuthentication yes'
+      state: present
+    notify:
+      - Restart sshd
+
+  - name: Set timezone
+    community.general.timezone:
+      name: Europe/Moscow
+
+  - name: List all files in directory /etc/yum.repos.d/*.repo
+    find:
+      paths: "/etc/yum.repos.d/"
+      patterns: "*.repo"
+    register: repos
+
+  - name: Comment mirrorlist /etc/yum.repos.d/CentOS-*
+    ansible.builtin.lineinfile:
+      backrefs: true
+      path: "{{ item.path }}"
+      regexp: '^(mirrorlist=.+)'
+      line: '#\1'
+    with_items: "{{ repos.files }}"
+
+  - name: Replace baseurl
+    ansible.builtin.lineinfile:
+      backrefs: true
+      path: "{{ item.path }}"
+      regexp: '^#baseurl=http:\/\/mirror.centos.org(.+)'
+      line: 'baseurl=http://vault.centos.org\1'
+    with_items: "{{ repos.files }}"
+
+  - name: Install soft
+    ansible.builtin.yum:
+      name:
+        - vim
+        - tcpdump
+        - traceroute
+        - dhcp-server
+        - httpd
+        - syslinux-tftpboot.noarch
+      state: present
+      update_cache: true
+
+  - name: Install TFTPD
+    ansible.builtin.yum:
+      name:
+        - tftp-server
+      state: present
+    notify:
+      - Restart TFTPD
+
+  - name: Copy dhcpd config on pxeserver
+    ansible.builtin.copy:
+      src: files/pxeserver-dhcpd.conf
+      dest: /etc/dhcp/dhcpd.conf
+    notify:
+      - Restart DHCP daemon
+
+  - name: Copy pxeboot files
+    ansible.builtin.copy:
+      remote_src: true
+      src: "/tftpboot/{{ item }}"
+      dest: /var/lib/tftpboot/
+    loop:
+      - pxelinux.0
+      - libutil.c32
+      - menu.c32
+      - libmenu.c32
+      - ldlinux.c32
+      - vesamenu.c32
+      - libcom32.c32
+      - chain.c32
+
+  - name: Create TFTP directory
+    ansible.builtin.file:
+      path: /var/lib/tftpboot/pxelinux.cfg
+      state: directory
+      mode: '0755'
+
+  - name: Copy menu config to pxeserver
+    ansible.builtin.copy:
+      src: files/pxeserver-default
+      dest: /var/lib/tftpboot/pxelinux.cfg/default
+
+  - name: Download ISO image
+    ansible.builtin.get_url:
+      url: http://ftp.mgts.by/pub/CentOS/8-stream/isos/x86_64/CentOS-Stream-8-x86_64-latest-dvd1.iso
+      dest: /mnt/
+      mode: '0644'
+
+  - name: Mount ISO image
+    ansible.posix.mount:
+      path: /mnt/iso
+      src: /mnt/CentOS-Stream-8-x86_64-latest-dvd1.iso
+      fstype: iso9660
+      opts: ro,loop
+      state: mounted
+
+  - name: Copy initrd and vmlinuz files to TFTP share
+    copy:
+      src: /mnt/iso/images/pxeboot/{{ item }}
+      dest: /var/lib/tftpboot/{{ item }}
+      mode: '0755'
+      remote_src: true
+    with_items:
+      - initrd.img
+      - vmlinuz
+
+
+  - name: httpd config
+    ansible.builtin.copy:
+      src: files/pxeboot.conf
+      dest: /etc/httpd/conf.d/pxeboot.conf
+      owner: root
+      group: root
+      mode: 0640
+    notify:
+      - Restart httpd
+
+  - name: Create config directory
+    ansible.builtin.file:
+      path: /mnt/config
+      state: directory
+      mode: '0755'
+      setype: httpd_sys_content_t
+      seuser: system_u
+
+  - name: Copy ks.cfg
+    ansible.builtin.copy:
+      src: files/pxeserver-ks.cfg
+      dest: /mnt/config/ks.cfg
+      owner: root
+      group: root
+      setype: httpd_sys_content_t
+      seuser: system_u
+      mode: 0644
+
+  - name: Add configs on httpd
+    ansible.builtin.copy:
+      src: files/pxeserver-configs.conf
+      dest: /etc/httpd/conf.d/configs.conf
+      owner: root
+      group: root
+      mode: 0640
+    notify:
+      - Restart httpd
+
+
+
+  handlers:
+
+  - name: Restart sshd
+    ansible.builtin.service:
+      name: sshd
+      state: reloaded
+
+  - name: Restart TFTPD
+    ansible.builtin.service:
+      name: tftp
+      enabled: true
+      state: reloaded
+    notify:
+      - Accept tftp
+
+  - name: Restart httpd
+    ansible.builtin.service:
+      name: httpd
+      state: reloaded
+      enabled: true
+    notify:
+      - Accept http
+
+  - name: Restart DHCP daemon
+    ansible.builtin.service:
+      name: dhcpd
+      enabled: true
+      state: reloaded
+
+  - name: Accept http
+    ansible.posix.firewalld:
+      service: http
+      permanent: true
+      state: enabled
+
+  - name: Accept tftp
+    ansible.posix.firewalld:
+      service: tftp
+      permanent: true
+      state: enabled
+
+
+
+- hosts: cobbler
+  become: true
+  gather_facts: false
+
+  tasks:
+
+  # Для стенда отключаем
+  - name: Disable SELinux
+    ansible.posix.selinux:
+      state: disabled
+    notify:
+      - Reboot
+
+  - name: Disable firewalld
+    ansible.builtin.service:
+      name: firewalld
+      state: stopped
+      enabled: false
+
+  - name: Accept login with password from sshd
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^PasswordAuthentication no$'
+      line: 'PasswordAuthentication yes'
+      state: present
+    notify:
+      - Restart sshd
+
+  - name: Set timezone
+    community.general.timezone:
+      name: Europe/Moscow
+
+  - name: List all files in directory /etc/yum.repos.d/*.repo
+    find:
+      paths: "/etc/yum.repos.d/"
+      patterns: "*.repo"
+    register: repos
+
+  - name: Comment mirrorlist /etc/yum.repos.d/CentOS-*
+    ansible.builtin.lineinfile:
+      backrefs: true
+      path: "{{ item.path }}"
+      regexp: '^(mirrorlist=.+)'
+      line: '#\1'
+    with_items: "{{ repos.files }}"
+
+  - name: Replace baseurl
+    ansible.builtin.lineinfile:
+      backrefs: true
+      path: "{{ item.path }}"
+      regexp: '^#baseurl=http:\/\/mirror.centos.org(.+)'
+      line: 'baseurl=http://vault.centos.org\1'
+    with_items: "{{ repos.files }}"
+
+  - name: Install epel-release
+    ansible.builtin.yum:
+      name:
+        - epel-release
+      state: present
+      update_cache: true
+
+  - name: Install system updates
+    ansible.builtin.yum:
+      name: '*'
+      state: latest
+      update_cache: yes
+
+  - name: Install soft
+    ansible.builtin.yum:
+      name:
+        - vim
+        - cobbler
+        - cobbler-web
+        - syslinux
+        - debmirror
+        - fence-agents
+        - pykickstart
+        - mc
+      state: present
+
+  - name: Comment dists in debmirror
+    ansible.builtin.lineinfile:
+      backrefs: true
+      path: /etc/debmirror.conf
+      regexp: '^@dists(.+)'
+      line: '#@dists\1'
+
+  - name: Comment arches in debmirror
+    ansible.builtin.lineinfile:
+      backrefs: true
+      path: /etc/debmirror.conf
+      regexp: '^@arches(.+)'
+      line: '#@arches\1'
+
+  - name: Install TFTPD
+    ansible.builtin.yum:
+      name:
+        - tftp-server
+      state: present
+    notify:
+      - Restart TFTPD
+
+  - name: Install dhcp server
+    ansible.builtin.yum:
+      name:
+        - dhcp-server
+      state: present
+      update_cache: true
+
+  - name: Copy dhcpd template for cobbler
+    ansible.builtin.copy:
+      src: files/cobbler-dhcp.template
+      dest: /etc/cobbler/dhcp.template
+
+  - name: Copy cobbler settings
+    ansible.builtin.copy:
+      src: files/cobbler-settings.yaml
+      dest: /etc/cobbler/settings.yaml
+    notify:
+      - Restart Cobbler daemon
+
+  # Обязательно перезапустить сервис, реестр перечитывается только при перезапуске
+  - name: Copy distro_signatures.json
+    ansible.builtin.copy:
+      src: files/cobbler-distro_signatures.json
+      dest: /var/lib/cobbler/distro_signatures.json
+    notify:
+      - Restart Cobbler daemon
+
+  # Автоматическая установка, данные уничтожаются на sda
+  - name: Copy fedora-ks.cfg
+    ansible.builtin.copy:
+      src: files/fedora-ks.cfg
+      dest: /var/lib/cobbler/templates/fedora.ks
+
+  - name: Copy from syslinux package files
+    ansible.builtin.copy:
+      remote_src: true
+      src: "/usr/share/syslinux/{{ item }}"
+      dest: /var/lib/cobbler/loaders/
+    loop:
+      - pxelinux.0
+      - libutil.c32
+      - menu.c32
+      - libmenu.c32
+      - ldlinux.c32
+      - vesamenu.c32
+      - libcom32.c32
+      - chain.c32
+
+  - name: Download Fedora 38 Server ISO image
+    ansible.builtin.get_url:
+      url: https://mirror.yandex.ru/fedora/linux/releases/38/Server/x86_64/iso/Fedora-Server-dvd-x86_64-38-1.6.iso
+      dest: /mnt/
+      mode: '0644'
+
+  - name: Mount ISO image Fedora 38
+    ansible.posix.mount:
+      path: /mnt/iso
+      src: /mnt/Fedora-Server-dvd-x86_64-38-1.6.iso
+      fstype: iso9660
+      opts: ro,loop
+      state: mounted
+
+  - name: Mount distro_mirror
+    ansible.posix.mount:
+      path: /var/www/cobbler/distro_mirror
+      src: /mnt/distro_mirror
+      opts: bind
+      state: mounted
+      fstype: none
+
+  - name: Cobbler create boot.0 (grub)
+    ansible.builtin.shell: /usr/share/cobbler/bin/mkgrub.sh
+
+  - name: Start Cobbler daemon
+    ansible.builtin.service:
+      name: cobblerd
+      enabled: true
+      state: started
+
+  - name: List distro_mirror fedora38
+    ansible.builtin.shell: 'ls /var/www/cobbler/distro_mirror/ | grep fedora38'
+    ignore_errors: true
+    register: contents
+
+  - name: Cobbler import fedora38
+    ansible.builtin.command: cobbler import --name=fedora38 --arch=x86_64 --path=/mnt/iso
+    when: contents.stdout == ""
+
+    # Следующие таски только для приемра, что можно назначить любую установку любому хосту
+  - name: List cobbler distro fedora38
+    ansible.builtin.shell: 'cobbler distro list | grep fedora38'
+    register: contents
+    ignore_errors: true
+
+  - name: Cobbler add system fedora38
+    ansible.builtin.command: cobbler system add --name=test --profile=fedora38-x86_64
+    when: contents.stdout == ""
+
+  - name: Cobbler edit system fedora38
+    ansible.builtin.command: cobbler system edit --name=test --interface=eth1 --mac=08:00:27:52:3B:09 --ip-address=10.0.0.100 --netmask=255.255.255.0 --static=1 --dns-name=test.mydomain.co
+    when: contents.stdout == ""
+
+  - name: Cobbler sync
+    ansible.builtin.command: cobbler sync
+
+  - name: Enable TFTPD
+    ansible.builtin.service:
+      name: tftp
+      enabled: true
+      state: reloaded
+
+  handlers:
+
+  - name: Restart sshd
+    ansible.builtin.service:
+      name: sshd
+      state: reloaded
+
+  - name: Restart TFTPD
+    ansible.builtin.service:
+      name: tftp
+      state: reloaded
+
+  - name: Restart DHCP daemon
+    ansible.builtin.service:
+      name: dhcpd
+      enabled: true
+      state: reloaded
+
+  - name: Restart Cobbler daemon
+    ansible.builtin.service:
+      name: cobblerd
+      enabled: true
+      state: restarted
+
+  - name: Reboot
+    ansible.builtin.reboot:
+

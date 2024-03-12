@@ -1,0 +1,64 @@
+[
+  {
+    "name": "pxeserver",
+    "cpus": 1,
+    "gui": false,
+    "box": "centos/8",
+    "private_network": 
+    [
+      { "ip": "10.0.0.20",      "adapter": 2, "netmask": "255.255.255.0", "virtualbox__intnet": "pxenet" },
+      { "ip": "192.168.56.200", "adapter": 3, "netmask": "255.255.255.0" }
+    ],
+    "memory": "1024",
+    "no_share": true,
+    "disks": {
+      "sata1": {
+        "dfile": "./disks/sata1.vdi",
+        "size": "20000",
+        "ctlname": "SATA Controller"
+      }
+    },
+    "controllers": 
+    [
+      { "name": "SATA Controller", "ctl": "sata" }
+    ]
+  },
+  {
+    "name": "pxeclient",
+    "cpus": 1,
+    "gui": true,
+    "box": "centos/8",
+    "private_network":
+    [
+      { "ip": "10.0.0.21",      "adapter": 2, "netmask": "255.255.255.252", "virtualbox__intnet": "pxenet" },
+      { "ip": "192.168.56.210", "adapter": 3, "netmask": "255.255.255.0" }
+    ],
+    "memory": 8192,
+    "no_share": true,
+    "lanboot": true
+  },
+  {
+    "name": "cobbler",
+    "cpus": 1,
+    "gui": false,
+    "box": "centos/8",
+    "private_network": 
+    [
+      { "ip": "10.0.0.22",      "adapter": 2, "netmask": "255.255.255.0", "virtualbox__intnet": "pxenet" },
+      { "ip": "192.168.56.220", "adapter": 3, "netmask": "255.255.255.0" }
+    ],
+    "memory": "1024",
+    "no_share": true,
+    "disks": {
+      "sata1": {
+        "dfile": "./disks/sata-cobbler.vdi",
+        "size": "20000",
+        "ctlname": "SATA Controller"
+      }
+    },
+    "controllers": 
+    [
+      { "name": "SATA Controller", "ctl": "sata" }
+    ]
+  }
+]
