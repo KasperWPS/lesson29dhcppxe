@@ -7,7 +7,7 @@
   - DHCP
   - HTTPD
 - Реализовать автоматическую установку (kickstart)
-- ***** Самостоятельно развернуть Cobbler (https://cobbler.readthedocs.io/en/latest/quickstart-guide.html)
+- * Самостоятельно развернуть Cobbler (https://cobbler.readthedocs.io/en/latest/quickstart-guide.html)
 
 ## Выполнение
 
@@ -414,7 +414,7 @@ Alias /config /mnt/config
 
 *SELinux не утключен, добавлены правила в firewalld*
 
-### Для проверки запустиь pxeclient - начнётся установка CentOS
+### Для проверки запустить pxeclient - начнётся установка CentOS
 
 ```
 vagrant up pxeserver
